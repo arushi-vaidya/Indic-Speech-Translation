@@ -87,4 +87,3 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ---
 
-Would you like me to include a usage example (like a sample audio input and output)?
