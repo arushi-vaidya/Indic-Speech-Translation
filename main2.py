@@ -204,6 +204,11 @@ class SpeechTranslatorApp:
         # Audio enhancement settings
         self.enhancement_enabled = tk.BooleanVar(value=True)
         self.noise_threshold_var = tk.DoubleVar(value=1.5)
+        # Audio enhancement settings
+        self.enhancement_enabled = tk.BooleanVar(value=True)
+        self.noise_threshold_var = tk.DoubleVar(value=1.5)
+        # ADD THIS LINE:
+        self.auto_play_enabled = tk.BooleanVar(value=True)
         
         # Initialize models
         self.load_models_thread = threading.Thread(target=self.load_models)
@@ -279,6 +284,9 @@ class SpeechTranslatorApp:
         self.threshold_label.pack(side=tk.LEFT, padx=5)
         
         threshold_scale.bind("<Motion>", self.update_threshold_label)
+        auto_play_check = ttk.Checkbutton(enhancement_frame, text="Auto-play after translation", 
+                                        variable=self.auto_play_enabled)
+        auto_play_check.pack(anchor=tk.W, pady=5)
         
         # Language Selection Frame
         lang_frame = ttk.Frame(main_frame)
@@ -635,6 +643,8 @@ class SpeechTranslatorApp:
                 self.play_button.config(state=tk.NORMAL)
                 self.progress.stop()
                 self.update_status("Translation complete! Ready to play.")
+                if self.auto_play_enabled.get():
+                    self.root.after(100, self.play_audio)
             self.root.after(0, enable_play)
             
         except Exception as e:
