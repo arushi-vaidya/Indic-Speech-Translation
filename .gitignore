@@ -1,0 +1,17 @@
+# Virtual environments
+venv/
+myenv/
+Noise_Supression/myenv/
+
+# Large binary files
+*.dylib
+*.so
+*.npy
+*.pt
+*.pkl
+*.bin
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
