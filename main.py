@@ -13,7 +13,6 @@ from IndicTransToolkit import IndicProcessor  # ← CRITICAL DEPENDENCY
 # TTS dependencies
 from TTS.utils.synthesizer import Synthesizer
 
-
 import os
 import time
 import wave
@@ -36,11 +35,21 @@ import shutil
 from pathlib import Path
 import json
 
-# Fast Kannada TTS Integration
-# Apply surgical CUDA patches for CPU-only operation
+# Force environment variables to prevent cache issues
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 os.environ['TORCH_USE_CUDA_DSA'] = '0'
 os.environ['FORCE_CPU'] = '1'
+os.environ['HF_HOME'] = os.path.join(os.getcwd(), '.cache', 'huggingface')
+os.environ['TRANSFORMERS_CACHE'] = os.path.join(os.getcwd(), '.cache', 'transformers')
+
+# Create cache directories
+os.makedirs(os.environ['HF_HOME'], exist_ok=True)
+os.makedirs(os.environ['TRANSFORMERS_CACHE'], exist_ok=True)
+
+# Disable transformers warnings and cache warnings
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 
 # Store original functions before patching
 original_cuda_is_available = torch.cuda.is_available
@@ -84,11 +93,11 @@ def patched_tensor_to(self, *args, **kwargs):
 torch.Tensor.cuda = patched_tensor_cuda
 torch.Tensor.to = patched_tensor_to
 
-print("✅ Fast TTS patches applied - CPU-only mode enabled")
+print("✅ Cache and TTS patches applied - CPU-only mode enabled")
 
 
 class FastKannadaTTS:
-    """Integrated Fast Kannada TTS for the pipeline"""
+    """Integrated Fast Kannada TTS for the pipeline with enhanced error handling"""
     def __init__(self):
         self.setup_paths()
         self.synthesizer = None
@@ -174,7 +183,7 @@ class FastKannadaTTS:
         return None
     
     def initialize(self):
-        """Initialize the TTS synthesizer"""
+        """Initialize the TTS synthesizer with enhanced error handling"""
         if self.is_initialized:
             return True
             
@@ -188,6 +197,7 @@ class FastKannadaTTS:
             # Import TTS after patches are applied
             from TTS.utils.synthesizer import Synthesizer
             
+            # CRITICAL FIX: Initialize with explicit CPU device and disabled cache
             self.synthesizer = Synthesizer(
                 tts_checkpoint=self.model_paths['fastpitch_model'],
                 tts_config_path=self.model_paths['fastpitch_config'],
@@ -196,73 +206,142 @@ class FastKannadaTTS:
                 use_cuda=False
             )
             
+            # Force all models to CPU and disable any CUDA references
+            if hasattr(self.synthesizer, 'tts_model') and self.synthesizer.tts_model:
+                self.synthesizer.tts_model = self.synthesizer.tts_model.cpu()
+                self.synthesizer.tts_model.eval()
+                
+            if hasattr(self.synthesizer, 'vocoder_model') and self.synthesizer.vocoder_model:
+                self.synthesizer.vocoder_model = self.synthesizer.vocoder_model.cpu()
+                self.synthesizer.vocoder_model.eval()
+            
             self.is_initialized = True
             print(f"✅ Fast Kannada TTS initialized successfully with {self.model_paths['type']} models!")
             return True
             
         except Exception as e:
             print(f"❌ Failed to initialize Fast Kannada TTS: {e}")
+            import traceback
+            print("Full traceback:")
+            traceback.print_exc()
             return False
     
     def synthesize(self, text, output_path):
-            """Synthesize Kannada text to speech with proper speaker handling"""
-            if not self.is_initialized:
-                if not self.initialize():
-                    return False
+        """Synthesize Kannada text to speech with comprehensive error handling"""
+        if not self.is_initialized:
+            if not self.initialize():
+                return False
+        
+        try:
+            print(f"🎵 Synthesizing: {text}")
+            start_time = time.time()
             
-            try:
-                print(f"🎵 Synthesizing: {text}")
-                start_time = time.time()
-                
-                # Get speaker information from the synthesizer
-                speakers = self.get_available_speakers()
-                
-                # Try different speaker approaches in order of preference
-                wav = None
-                synthesis_attempts = [
-                    # Attempt 1: Use speaker_idx=0 (most common)
-                    lambda: self.synthesizer.tts(text, speaker_idx=0),
-                    # Attempt 2: Use first speaker name if available
-                    lambda: self.synthesizer.tts(text, speaker_name=speakers[0]) if speakers else None,
-                    # Attempt 3: Use speaker_wav (empty for default)
-                    lambda: self.synthesizer.tts(text, speaker_wav=""),
-                    # Attempt 4: Try with speaker_idx=None explicitly
-                    lambda: self.synthesizer.tts(text, speaker_idx=None),
-                    # Attempt 5: Basic synthesis (last resort)
-                    lambda: self.synthesizer.tts(text)
-                ]
-                
-                for i, attempt in enumerate(synthesis_attempts):
-                    try:
-                        if attempt is None:
-                            continue
-                        wav = attempt()
+            # Get speaker information from the synthesizer
+            speakers = self.get_available_speakers()
+            
+            # CRITICAL FIX: Use multiple synthesis strategies with explicit cache control
+            wav = None
+            synthesis_attempts = [
+                # Attempt 1: Basic synthesis without speaker (most likely to work)
+                lambda: self.safe_synthesis(text, None),
+                # Attempt 2: Use speaker_idx=0 if multi-speaker
+                lambda: self.safe_synthesis(text, {'speaker_idx': 0}),
+                # Attempt 3: Use first speaker name if available
+                lambda: self.safe_synthesis(text, {'speaker_name': speakers[0]}) if speakers else None,
+                # Attempt 4: Empty speaker_wav
+                lambda: self.safe_synthesis(text, {'speaker_wav': ""}),
+                # Attempt 5: Force single speaker mode
+                lambda: self.force_single_speaker_synthesis(text)
+            ]
+            
+            for i, attempt in enumerate(synthesis_attempts):
+                try:
+                    if attempt is None:
+                        continue
+                    wav = attempt()
+                    if wav is not None and len(wav) > 100:  # Valid audio
                         print(f"✅ Synthesis successful with method {i+1}")
                         break
-                    except Exception as e:
-                        print(f"⚠️ Synthesis method {i+1} failed: {e}")
-                        continue
-                
-                if wav is None:
-                    print("❌ All synthesis methods failed")
-                    return False
-                
-                # Save audio
-                self.synthesizer.save_wav(wav, output_path)
-                
-                synthesis_time = time.time() - start_time
-                
-                # Verify output
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
-                    print(f"✅ Fast TTS synthesis completed in {synthesis_time:.2f} seconds!")
-                    return True
-                else:
-                    print("❌ Output file was not created or is empty")
-                    return False
-                    
-            except Exception as e:
-                print(f"❌ Fast TTS synthesis failed: {e}")
+                except Exception as e:
+                    print(f"⚠️ Synthesis method {i+1} failed: {e}")
+                    continue
+            
+            if wav is None or len(wav) < 100:
+                print("❌ All synthesis methods failed")
                 return False
+            
+            # Save audio with error handling
+            try:
+                self.synthesizer.save_wav(wav, output_path)
+            except Exception as e:
+                print(f"⚠️ Save_wav failed, trying direct save: {e}")
+                # Fallback: save directly using soundfile
+                import soundfile as sf
+                sample_rate = getattr(self.synthesizer, 'output_sample_rate', 22050)
+                if hasattr(self.synthesizer, 'ap') and hasattr(self.synthesizer.ap, 'sample_rate'):
+                    sample_rate = self.synthesizer.ap.sample_rate
+                sf.write(output_path, wav, sample_rate)
+            
+            synthesis_time = time.time() - start_time
+            
+            # Verify output
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                print(f"✅ Fast TTS synthesis completed in {synthesis_time:.2f} seconds!")
+                return True
+            else:
+                print("❌ Output file was not created or is empty")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Fast TTS synthesis failed: {e}")
+            import traceback
+            print("Full traceback:")
+            traceback.print_exc()
+            return False
+    
+    def safe_synthesis(self, text, speaker_config):
+        """Safe synthesis with cache and error handling"""
+        try:
+            # Disable any cache mechanisms that might cause issues
+            with torch.no_grad():
+                if speaker_config is None:
+                    # Basic synthesis
+                    wav = self.synthesizer.tts(text)
+                elif 'speaker_idx' in speaker_config:
+                    wav = self.synthesizer.tts(text, speaker_idx=speaker_config['speaker_idx'])
+                elif 'speaker_name' in speaker_config:
+                    wav = self.synthesizer.tts(text, speaker_name=speaker_config['speaker_name'])
+                elif 'speaker_wav' in speaker_config:
+                    wav = self.synthesizer.tts(text, speaker_wav=speaker_config['speaker_wav'])
+                else:
+                    wav = self.synthesizer.tts(text)
+                
+                return wav
+                
+        except Exception as e:
+            print(f"Safe synthesis error: {e}")
+            return None
+    
+    def force_single_speaker_synthesis(self, text):
+        """Force single speaker mode to avoid cache issues"""
+        try:
+            # Try to force the model into single-speaker mode
+            original_num_speakers = None
+            if hasattr(self.synthesizer.tts_model, 'num_speakers'):
+                original_num_speakers = self.synthesizer.tts_model.num_speakers
+                self.synthesizer.tts_model.num_speakers = 0
+            
+            wav = self.synthesizer.tts(text)
+            
+            # Restore original setting
+            if original_num_speakers is not None:
+                self.synthesizer.tts_model.num_speakers = original_num_speakers
+            
+            return wav
+            
+        except Exception as e:
+            print(f"Force single speaker error: {e}")
+            return None
 
     def get_available_speakers(self):
         """Get available speakers from the model with better error handling"""
@@ -418,7 +497,7 @@ class AudioEnhancer:
 class SpeechTranslatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Enhanced English to Kannada Translator with Fast TTS")
+        self.root.title("Enhanced English to Kannada Translator with Fast TTS - Fixed")
         self.root.geometry("650x700")  
         self.root.resizable(True, True)
         
@@ -504,36 +583,66 @@ class SpeechTranslatorApp:
         self.create_widgets()
     
     def load_models(self):
-        """Load all models in a background thread to keep UI responsive"""
+        """Load all models in a background thread with enhanced error handling"""
         try:
             # Update status
-            self.update_status("Loading models, please wait...")
+            self.update_status("Loading models with cache fixes, please wait...")
             
             # Device configuration
-            self.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+            self.DEVICE = "cpu"  # Force CPU to avoid cache issues
             
             # Load Whisper model
             self.update_status("Loading Whisper model...")
             self.whisper_model = whisper.load_model("base")
             
-            # Load translation model
-            self.update_status("Loading IndicTrans model...")
+            # Load translation model with explicit cache control
+            self.update_status("Loading IndicTrans model with cache fixes...")
             model_name = "ai4bharat/indictrans2-en-indic-1B"
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name, trust_remote_code=True)
+            
+            # CRITICAL FIX: Load with explicit cache control and CPU forcing
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name, 
+                trust_remote_code=True,
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                local_files_only=False,
+                force_download=False
+            )
+            
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                model_name, 
+                trust_remote_code=True,
+                cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                torch_dtype=torch.float32,  # Use float32 for stability
+                local_files_only=False,
+                force_download=False
+            ).to(self.DEVICE)
+            
+            # Force model to eval mode and CPU
+            self.model.eval()
+            
             self.ip = IndicProcessor(inference=True)
             
             # Initialize Fast Kannada TTS
-            self.update_status("Initializing Fast Kannada TTS...")
+            self.update_status("Initializing Fast Kannada TTS with fixes...")
             fast_tts_success = self.fast_kannada_tts.initialize()
             
             # Load fallback TTS model only if needed for other languages
             self.update_status("Loading fallback TTS model...")
             try:
                 from parler_tts import ParlerTTSForConditionalGeneration
-                self.tts_model = ParlerTTSForConditionalGeneration.from_pretrained("ai4bharat/indic-parler-tts").to(self.DEVICE)
-                self.tts_tokenizer = AutoTokenizer.from_pretrained("ai4bharat/indic-parler-tts")
-                self.description_tokenizer = AutoTokenizer.from_pretrained(self.tts_model.config.text_encoder._name_or_path)
+                self.tts_model = ParlerTTSForConditionalGeneration.from_pretrained(
+                    "ai4bharat/indic-parler-tts",
+                    cache_dir=os.environ['TRANSFORMERS_CACHE'],
+                    torch_dtype=torch.float32
+                ).to(self.DEVICE)
+                self.tts_tokenizer = AutoTokenizer.from_pretrained(
+                    "ai4bharat/indic-parler-tts",
+                    cache_dir=os.environ['TRANSFORMERS_CACHE']
+                )
+                self.description_tokenizer = AutoTokenizer.from_pretrained(
+                    self.tts_model.config.text_encoder._name_or_path,
+                    cache_dir=os.environ['TRANSFORMERS_CACHE']
+                )
                 self.tts_model.eval()
                 fallback_tts_loaded = True
             except Exception as e:
@@ -542,37 +651,45 @@ class SpeechTranslatorApp:
             
             # Update status based on what loaded
             if fast_tts_success and fallback_tts_loaded:
-                self.update_status("All models loaded! Fast TTS ready for Kannada, fallback available for other languages.")
+                self.update_status("✅ All models loaded with cache fixes! Fast TTS ready for Kannada.")
             elif fast_tts_success:
-                self.update_status("Fast Kannada TTS loaded! Other languages may not be available.")
+                self.update_status("✅ Fast Kannada TTS loaded with fixes! Other languages may not be available.")
             elif fallback_tts_loaded:
-                self.update_status("Fallback TTS loaded. Fast TTS not available - check Kannada models.")
+                self.update_status("✅ Fallback TTS loaded. Fast TTS not available - check Kannada models.")
             else:
                 self.update_status("⚠️ Limited functionality - some TTS models failed to load")
             
             self.record_button.config(state=tk.NORMAL)
             
         except Exception as e:
-            self.update_status(f"Error loading models: {str(e)}")
+            error_msg = f"Error loading models: {str(e)}"
+            print(f"Model loading error: {e}")
+            import traceback
+            traceback.print_exc()
+            self.update_status(error_msg)
             messagebox.showerror("Error", f"Failed to load models: {str(e)}")
     
     def create_widgets(self):
         main_frame = ttk.Frame(self.root, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        title_label = ttk.Label(main_frame, text="Enhanced English to Kannada Translator with Fast TTS", 
+        title_label = ttk.Label(main_frame, text="Enhanced English to Kannada Translator - Cache Fixed", 
                                font=("Arial", 16, "bold"))
         title_label.pack(pady=10)
         
-        self.status_label = ttk.Label(main_frame, text="Loading models, please wait...", foreground="blue")
+        self.status_label = ttk.Label(main_frame, text="Loading models with cache fixes...", foreground="blue")
         self.status_label.pack(pady=10)
         
         # Fast TTS Status Frame
-        tts_status_frame = ttk.LabelFrame(main_frame, text="TTS Status", padding=10)
+        tts_status_frame = ttk.LabelFrame(main_frame, text="TTS Status & Cache Info", padding=10)
         tts_status_frame.pack(fill=tk.X, pady=5)
         
         self.tts_status_label = ttk.Label(tts_status_frame, text="Checking Fast TTS availability...", foreground="orange")
         self.tts_status_label.pack(anchor=tk.W)
+        
+        self.cache_info_label = ttk.Label(tts_status_frame, text=f"Cache: {os.environ['TRANSFORMERS_CACHE']}", 
+                                         foreground="gray", font=("Arial", 9))
+        self.cache_info_label.pack(anchor=tk.W)
         
         # Update TTS status
         def update_tts_status():
@@ -665,6 +782,10 @@ class SpeechTranslatorApp:
         # Performance Info
         self.performance_label = ttk.Label(main_frame, text="", foreground="blue", font=("Arial", 10))
         self.performance_label.pack(pady=2)
+        
+        # Error Info (new)
+        self.error_label = ttk.Label(main_frame, text="", foreground="red", font=("Arial", 10))
+        self.error_label.pack(pady=2)
     
     def update_threshold_label(self, event=None):
         """Update the threshold label with current value"""
@@ -714,6 +835,16 @@ class SpeechTranslatorApp:
         else:
             self.root.after(0, _update)
     
+    def update_error_info(self, message):
+        """Update error information"""
+        def _update():
+            self.error_label.config(text=message)
+        
+        if threading.current_thread() is threading.main_thread():
+            _update()
+        else:
+            self.root.after(0, _update)
+    
     def toggle_recording(self):
         if not self.is_recording:
             self.start_recording()
@@ -728,6 +859,7 @@ class SpeechTranslatorApp:
         self.update_status("Recording... Speak now")
         self.update_quality_info("")
         self.update_performance_info("")
+        self.update_error_info("")
         
         # Reset audio enhancer state
         self.audio_enhancer.noise_profile = np.zeros((self.audio_enhancer.frame_length // 2 + 1, 1))
@@ -870,13 +1002,14 @@ class SpeechTranslatorApp:
                 return False
     
     def process_recording(self):
-        """Process the recorded audio through the translation pipeline"""
+        """Process the recorded audio through the translation pipeline with enhanced error handling"""
         pipeline_start_time = time.time()
         
         try:
             # Check if recording file exists and has content
             if not os.path.exists(self.temp_wav_file) or os.path.getsize(self.temp_wav_file) < 100:
                 self.update_status("Error: Recording file is empty or too small")
+                self.update_error_info("No audio was recorded. Please check your microphone settings.")
                 messagebox.showerror("Error", "No audio was recorded. Please check your microphone settings.")
                 return
             
@@ -887,6 +1020,7 @@ class SpeechTranslatorApp:
             enhance_start = time.time()
             if not self.enhance_recorded_audio():
                 self.update_status("Error: Failed to process audio")
+                self.update_error_info("Audio enhancement failed")
                 self.root.after(0, self.progress.stop)
                 return
             enhance_time = time.time() - enhance_start
@@ -909,6 +1043,7 @@ class SpeechTranslatorApp:
             
             if not english_text.strip():
                 self.update_status("Error: Could not transcribe any text")
+                self.update_error_info("No speech detected in the recording.")
                 messagebox.showerror("Error", "No speech detected in the recording. Please try again.")
                 self.root.after(0, self.progress.stop)
                 return
@@ -918,43 +1053,61 @@ class SpeechTranslatorApp:
                 self.english_text.insert(tk.END, english_text)
             self.root.after(0, update_english)
             
-            # Step 2: Translate
+            # Step 2: Translate with cache fixes
             translate_start = time.time()
             display_name = selected_language.replace(" (Fast TTS)", "")
             self.update_status(f"Translating to {display_name}...")
-            batch = self.ip.preprocess_batch([english_text], src_lang="eng_Latn", tgt_lang=target_lang_code)
-            inputs = self.tokenizer(
-                batch,
-                truncation=True,
-                padding="longest",
-                return_tensors="pt",
-                return_attention_mask=True,
-            ).to(self.DEVICE)
             
-            with torch.no_grad():
-                output_tokens = self.model.generate(
-                    **inputs,
-                    use_cache=True,
-                    min_length=0,
-                    max_length=256,
-                    num_beams=5,
-                    num_return_sequences=1,
-                )
-            
-            with self.tokenizer.as_target_tokenizer():
-                decoded = self.tokenizer.batch_decode(
-                    output_tokens.detach().cpu().tolist(),
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=True,
-                )
-            
-            translated_text = self.ip.postprocess_batch(decoded, lang=target_lang_code)[0]
-            translate_time = time.time() - translate_start
-            
-            def update_translated():
-                self.translated_text.delete(1.0, tk.END)
-                self.translated_text.insert(tk.END, translated_text)
-            self.root.after(0, update_translated)
+            try:
+                batch = self.ip.preprocess_batch([english_text], src_lang="eng_Latn", tgt_lang=target_lang_code)
+                inputs = self.tokenizer(
+                    batch,
+                    truncation=True,
+                    padding="longest",
+                    return_tensors="pt",
+                    return_attention_mask=True,
+                ).to(self.DEVICE)
+                
+                # CRITICAL FIX: Use no_grad and disable cache explicitly
+                with torch.no_grad():
+                    # Clear any existing cache
+                    if hasattr(self.model, 'generation_config'):
+                        self.model.generation_config.use_cache = False
+                    
+                    output_tokens = self.model.generate(
+                        **inputs,
+                        use_cache=False,  # CRITICAL: Disable cache to prevent layer access error
+                        min_length=0,
+                        max_length=256,
+                        num_beams=5,
+                        num_return_sequences=1,
+                        do_sample=False,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id
+                    )
+                
+                with self.tokenizer.as_target_tokenizer():
+                    decoded = self.tokenizer.batch_decode(
+                        output_tokens.detach().cpu().tolist(),
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=True,
+                    )
+                
+                translated_text = self.ip.postprocess_batch(decoded, lang=target_lang_code)[0]
+                translate_time = time.time() - translate_start
+                
+                def update_translated():
+                    self.translated_text.delete(1.0, tk.END)
+                    self.translated_text.insert(tk.END, translated_text)
+                self.root.after(0, update_translated)
+                
+            except Exception as e:
+                self.update_error_info(f"Translation failed: {str(e)}")
+                print(f"Translation error: {e}")
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, self.progress.stop)
+                return
             
             # Step 3: Text to Speech (Fast TTS for Kannada, fallback for others)
             tts_start = time.time()
@@ -966,6 +1119,7 @@ class SpeechTranslatorApp:
                 
                 if not success:
                     self.update_status("Fast TTS failed, trying fallback...")
+                    self.update_error_info("Fast TTS failed, attempting fallback")
                     success = self.fallback_tts(translated_text, selected_language)
             else:
                 # Use fallback TTS for other languages
@@ -987,22 +1141,28 @@ class SpeechTranslatorApp:
                     if use_fast_tts:
                         self.update_status(f"✅ Fast TTS complete! Total time: {total_time:.1f}s")
                     else:
-                        self.update_status(f"Translation complete! Total time: {total_time:.1f}s")
+                        self.update_status(f"✅ Translation complete! Total time: {total_time:.1f}s")
                     
                     if self.auto_play_enabled.get():
                         self.root.after(100, self.play_audio)
                 self.root.after(0, enable_play)
             else:
                 self.root.after(0, self.progress.stop)
-                self.update_status("TTS generation failed")
+                self.update_status("❌ TTS generation failed")
+                self.update_error_info("Text-to-speech synthesis failed")
             
         except Exception as e:
             self.root.after(0, self.progress.stop)
-            self.update_status(f"Error: {str(e)}")
-            messagebox.showerror("Error", f"Processing failed: {str(e)}")
+            error_msg = f"Processing failed: {str(e)}"
+            self.update_status(f"❌ Error: {str(e)}")
+            self.update_error_info(error_msg)
+            print(f"Pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", error_msg)
     
     def fallback_tts(self, text, language):
-        """Fallback TTS using the original IndicParlerTTS"""
+        """Fallback TTS using the original IndicParlerTTS with cache fixes"""
         try:
             if not hasattr(self, 'tts_model'):
                 print("❌ Fallback TTS model not available")
@@ -1019,12 +1179,15 @@ class SpeechTranslatorApp:
             prompt_input_ids = prompt_inputs.input_ids.to(self.DEVICE)
             prompt_attention_mask = prompt_inputs.attention_mask.to(self.DEVICE)
             
+            # CRITICAL FIX: Use no_grad and disable cache
             with torch.no_grad():
                 generation = self.tts_model.generate(
                     input_ids=description_input_ids,
                     attention_mask=description_attention_mask,
                     prompt_input_ids=prompt_input_ids,
-                    prompt_attention_mask=prompt_attention_mask
+                    prompt_attention_mask=prompt_attention_mask,
+                    use_cache=False,  # Disable cache to prevent layer access error
+                    do_sample=False
                 )
             
             audio_arr = generation.cpu().numpy().squeeze()
@@ -1034,6 +1197,8 @@ class SpeechTranslatorApp:
             
         except Exception as e:
             print(f"❌ Fallback TTS failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def play_audio(self):

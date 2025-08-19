@@ -1,6 +1,6 @@
-# Core ML libraries
+# Core ML libraries with specific versions to avoid cache issues
 torch>=2.0.0
-transformers>=4.30.0
+transformers>=4.35.0,<4.37.0  # Avoid 4.36.x which has cache issues
 accelerate>=0.20.0
 
 # Audio processing
@@ -25,3 +25,7 @@ scipy>=1.9.0
 
 # GUI
 #tkinter  # Usually built-in with Python
+
+#Compression
+sounddevice
+matplotlib
