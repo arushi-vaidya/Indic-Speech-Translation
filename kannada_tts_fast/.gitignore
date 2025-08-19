@@ -290,6 +290,8 @@ poetry.lock
 # Pipenv
 Pipfile.lock
 
+.DS_Store
+
 # ==========================================
 # Optional: Include Sample Files
 # ==========================================

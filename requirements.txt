@@ -1,0 +1,27 @@
+# Core ML libraries
+torch>=2.0.0
+transformers>=4.30.0
+accelerate>=0.20.0
+
+# Audio processing
+whisper
+librosa>=0.10.0
+soundfile>=0.12.0
+pyaudio
+pydub
+webrtcvad
+
+# TTS libraries
+TTS>=0.15.0
+# parler_tts (for fallback)
+
+# Translation libraries
+IndicTransToolkit>=1.0.0
+sentencepiece>=0.1.99
+
+# Scientific computing
+numpy>=1.21.0
+scipy>=1.9.0
+
+# GUI
+#tkinter  # Usually built-in with Python

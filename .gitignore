@@ -15,3 +15,56 @@ Noise_Supression/myenv/
 __pycache__/
 *.pyc
 *.pyo
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+venv310/
+ENV/
+env.bak/
+venv.bak/
+
+# Models and Large Files
+kn.zip
+kn/
+models/
+kannada_mac_optimized/
+kn_cpu_patched/
+*.pth
+*.wav
+*.mp3
+
+# Dependencies  
+IndicTrans2/
+IndicTransToolkit/
+
+# Runtime Files
+audio_files/
+temp_*.wav
+output*.wav
+*.log
+
+# Cache
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hugging Face Cache
+.cache/huggingface/
