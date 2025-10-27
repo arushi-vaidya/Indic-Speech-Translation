@@ -1,0 +1,5 @@
+This is a test sentence in English.
+How is the weather today?
+Please translate this sentence.
+The quick brown fox jumps over the lazy dog.
+Where is the nearest train station?
