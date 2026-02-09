@@ -9,7 +9,7 @@ This project can be useful in voice-based interfaces, accessibility tools, and m
 ## 🚀 Features
 
 * ✅ Noise suppression using a spectral gating algorithm
-* ✅ English to Kannada translation using **AI4Bharat’s IndicTrans** models
+* ✅ English to Kannada translation using **AI4Bharat’s IndicTrans** models optimized using qunatisation
 * ✅ Kannada Text-to-Speech (TTS) synthesis
 * ✅ Lightweight and modular pipeline
 
@@ -76,7 +76,7 @@ Indic-Speech-Translation/
 ## 🧪 What Happens Under the Hood
 
 1. 🎧 **Input Audio** is passed through a **spectral gating** algorithm to reduce background noise.
-2. 📝 The cleaned **English speech** is transcribed (if needed) and translated to **Kannada text** using **IndicTrans**.
+2. 📝 The cleaned **English speech** is transcribed (if needed) and translated to **Kannada text** using optimized **IndicTrans**.
 3. 🔊 The translated **Kannada text** is then converted to natural-sounding **speech** using a **Kannada TTS model**.
 
 ---
